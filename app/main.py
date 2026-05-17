@@ -1,14 +1,26 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from typing import List
 from . import models, schemas, database, auth
 
+# Initialize Database
 models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Workspace API")
 
-# Register the Middleware
+# --- CORS Middleware: The "Bridge" ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register the Authentication Middleware
 app.add_middleware(auth.JWTMiddleware)
 
 def get_db():
@@ -16,11 +28,21 @@ def get_db():
     try: yield db
     finally: db.close()
 
-@app.post("/auth/github/login")
-def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    access_token = auth.create_access_token(data={"sub": form_data.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+# --- Health Check: Proof of connection for your manager ---
+@app.get("/health")
+def health_check():
+    return {"status": "success", "message": "Backend and Frontend are connected!"}
 
+# --- Updated Login Route: Now accepts GET to allow browser redirects ---
+@app.get("/auth/github/login")
+def login():
+    # This redirects the user to the GitHub authorization page
+    # Replace 'YOUR_GITHUB_CLIENT_ID' with your actual GitHub App Client ID
+    client_id = "YOUR_GITHUB_CLIENT_ID" 
+    github_auth_url = f"https://github.com/login/oauth/authorize?client_id={client_id}&scope=repo"
+    return RedirectResponse(url=github_auth_url)
+
+# --- Keep your existing Workspace routes ---
 @app.post("/workspaces/", response_model=schemas.Workspace)
 def create_workspace(workspace: schemas.WorkspaceCreate, db: Session = Depends(get_db)):
     db_workspace = models.Workspace(**workspace.dict())
@@ -39,5 +61,5 @@ def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
     if not workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
     db.delete(workspace)
-    db.commit()
+    db.commit() 
     return {"message": "Workspace deleted successfully"}

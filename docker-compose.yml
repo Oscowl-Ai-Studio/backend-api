@@ -13,6 +13,7 @@ services:
 
   api:
     build: .
+    restart: always
     depends_on:
       - db
     environment:

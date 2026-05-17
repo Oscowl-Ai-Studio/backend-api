@@ -20,25 +20,41 @@ def create_access_token(data: dict):
 # Middleware for VALIDATION
 class JWTMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Allow these paths without a token
-        allowed_paths = ["/auth/github/login", "/docs", "/openapi.json", "/workspaces/"]
-        
-        # Only check auth for GET, POST, DELETE etc., except for allowed paths
-        if request.url.path in allowed_paths and request.method == "GET":
-            return await call_next(request)
-            
-        if request.url.path in ["/auth/github/login", "/docs", "/openapi.json"]:
+        # 1. DEFINE PUBLIC PATHS
+        # These routes will bypass the JWT check
+        public_paths = [
+            "/auth/github/login", 
+            "/health",           # Added for your connection test
+            "/docs", 
+            "/openapi.json", 
+            "/favicon.ico"
+        ]
+
+        # 2. CHECK IF PATH IS PUBLIC OR A GET REQUEST TO WORKSPACES
+        # We allow GET requests to /workspaces/ so the UI can list them
+        is_public = request.url.path in public_paths
+        is_workspace_get = (request.method == "GET" and request.url.path.startswith("/workspaces/"))
+
+        if is_public or is_workspace_get:
             return await call_next(request)
 
-        # Validate token in headers
+        # 3. PROTECT ALL OTHER REQUESTS (POST, DELETE, PUT)
         auth_header = request.headers.get("Authorization")
+        
         if not auth_header or not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing or invalid token")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="Authentication required: Missing or invalid token"
+            )
 
         token = auth_header.split(" ")[1]
+        
         try:
             jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         except Exception:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="Invalid or expired token"
+            )
 
         return await call_next(request)
