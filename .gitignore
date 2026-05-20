@@ -1,14 +1,9 @@
-# Python environment
 venv/
 __pycache__/
 *.pyc
-
-# Environment variables
 .env
-
-# Docker
-docker-compose.override.yml
-
-# IDEs
-.vscode/
-.idea/
+.DS_Store
+# Custom scripts
+fix_db.py
+sync_db.py
+test_connection.py

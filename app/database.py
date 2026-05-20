@@ -1,35 +1,26 @@
-import os
-import time
+#import os
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.declarative import declarative_base
+#from dotenv import load_dotenv
 
+# 1. Load variables from the .env file
+#load_dotenv()
 
-# We define the variables directly here to avoid system environment conflicts
-#DB_USER = "utkarshasalokhe"
-#DB_PASS = "Ups292001"
-#DB_HOST = "db"
-#DB_PORT = "5432"
-#DB_NAME = "utkarshasalokhe_db"
+# PASTE YOUR AZURE STRING HERE
+#DATABASE_URL = "postgresql://postgresql:OSCOWL@123@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?sslmode=require"
 
-DATABASE_URL = f"postgresql://utkarshasalokhe:Ups292001@db:5432/utkarshasalokhe_db"
+# Build the connection string using the environment variables
+#user = os.getenv("PGUSER")
+#password = os.getenv("PGPASSWORD")
+#host = os.getenv("PGHOST")
+#port = os.getenv("PGPORT")
+#db = os.getenv("PGDATABASE")
+#ssl = os.getenv("PGSSLMODE")
 
-#print(f"DEBUG: Attempting to connect to: {DATABASE_URL}")
-
-# Retry logic to wait for the database
-def create_engine_with_retry():
-    while True:
-        try:
-            engine = create_engine(DATABASE_URL)
-            engine.connect()
-            print("Successfully connected to the database!")
-            return engine
-        except OperationalError:
-            print("Database not ready, waiting 2 seconds...")
-            time.sleep(2)
-
-engine = create_engine_with_retry()
+DATABASE_URL = "postgresql://postgresql:OSCOWL%40123@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?sslmode=require"
+print(f"DEBUG: Using DATABASE_URL: {DATABASE_URL}")
+engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
