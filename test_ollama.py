@@ -1,15 +1,17 @@
-from openai import OpenAI
+import os
 
-client = OpenAI(
-    api_key="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"
-)
+import requests
+from dotenv import load_dotenv
 
-response = client.chat.completions.create(
-    model="gpt-4.1-mini",
-    messages=[
-        {"role": "user", "content": "Say hello"}
-    ],
-    max_tokens=5
-)
+load_dotenv()
+url = os.getenv("OLLAMA_BASE_URL")
 
-print(response.choices[0].message.content)
+payload = {
+    "model": "tinyllama",
+    "prompt": "What is AI?",
+    "stream": False
+}
+
+response = requests.post(url, json=payload)
+
+print(response.json()["response"])
