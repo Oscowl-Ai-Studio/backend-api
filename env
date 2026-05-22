@@ -1,0 +1,8 @@
+# # OpenAI API Key
+# OPENAI_API_KEY=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
+
+# Database URL
+DATABASE_URL =postgresql://postgresql:OSCOWL%40123@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?sslmode=require
+
+# Ollama URL
+OLLAMA_BASE_URL=http://localhost:11434/api/generate
