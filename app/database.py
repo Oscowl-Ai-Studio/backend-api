@@ -18,7 +18,7 @@ from sqlalchemy.ext.declarative import declarative_base
 #db = os.getenv("PGDATABASE")
 #ssl = os.getenv("PGSSLMODE")
 
-DATABASE_URL = "postgresql://postgresql:********@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?sslmode=require"
+DATABASE_URL = "postgresql://postgresql:OSCOWL%40123@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?sslmode=require"
 print(f"DEBUG: Using DATABASE_URL: {DATABASE_URL}")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
