@@ -1,49 +1,157 @@
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List
+import time
+import logging
+from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks  # ← Added BackgroundTasks
+from fastapi.security import OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+from typing import List
 
-# ==========================================
-# USER SCHEMAS
-# ==========================================
+# Internal imports
+from . import models, schemas, database, auth
 
-class UserBase(BaseModel):
-    username: str = Field(..., json_schema_extra={"example": "sunsung_dev"}, description="The unique username for account identification")
-    email: EmailStr = Field(..., json_schema_extra={"example": "sunsung@example.com"}, description="The primary communication email address")
+# Set up a logger to view provisioning logs in your terminal
+logger = logging.getLogger("uvicorn")
 
-class UserCreate(UserBase):
-    password: str = Field(..., json_schema_extra={"example": "SecurePassword123!"}, description="The raw password string, hashed before saving")
+# Initialize Database tables
+from sqlalchemy.ext.asyncio import AsyncEngine  # ← Add this import near your other imports
 
-class User(UserBase):
-    id: int = Field(..., json_schema_extra={"example": 1}, description="The unique auto-incremented database ID")
+# Initialize Database tables cleanly depending on engine type
+if isinstance(database.engine, AsyncEngine):
+    # If the engine is async, tables are typically managed by Alembic, 
+    # so we pass here during a synchronous test collection.
+    pass
+else:
+    # Fallback for synchronous test engines
+    models.Base.metadata.create_all(bind=database.engine)
+
+app = FastAPI(title="Workspace API - AI Studio")
+
+# --- CORS Middleware ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register JWT Middleware (Protects your routes)
+app.add_middleware(auth.JWTMiddleware)
+
+# Database Dependency
+def get_db():
+    db = database.SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# --- CONTAINER PROVISIONING STUB FUNCTION ---
+def provision_workspace(workspace_id: int, db_session_factory):
+    """
+    Simulates asynchronous workspace container provisioning.
+    Logs actions, waits to simulate a pod creation delay, and updates database status.
+    """
+    # 1. Mandatory Log print statement
+    logger.info(f"Provisioning workspace {workspace_id}")
     
-    model_config = ConfigDict(from_attributes=True)
+    # 2. Simulate background task runtime delay (e.g., waiting for K8s)
+    time.sleep(2)
+    
+    # 3. Spin up an isolated session to update the status safely in the background thread
+    db = db_session_factory()
+    try:
+        db_workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
+        if db_workspace:
+            db_workspace.status = models.WorkspaceStatus.RUNNING
+            db.commit()
+            logger.info(f"Workspace {workspace_id} has been provisioned successfully and is now running.")
+    finally:
+        db.close()
 
 
-# ==========================================
-# WORKSPACE SCHEMAS
-# ==========================================
+# --- 1. Health Check ---
+@app.get("/health")
+def health_check():
+    return {"status": "success", "message": "Backend is alive and connected!"}
 
-class WorkspaceBase(BaseModel):
-    name: str = Field(..., json_schema_extra={"example": "Data-Analysis-Pod"}, description="The display name of the developer workspace")
-    description: Optional[str] = Field(None, json_schema_extra={"example": "Jupyter notebook instance for model evaluation"}, description="Detailed purpose of the workspace environment")
+# --- 2. Basic Auth Endpoint (Stub Login) ---
+@app.post("/login")
+def login(login_data: schemas.LoginRequest, db: Session = Depends(get_db)):
+    if login_data.username == "admin" and login_data.password == "password123":
+        user = db.query(models.User).filter(models.User.username == "admin").first()
+        
+        if not user:
+            user = models.User(
+                id=1,
+                username="admin", 
+                email="admin@example.com", 
+                hashed_password="hashed_password"
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        
+        access_token = auth.create_access_token(data={"sub": user.username})
+        return {"access_token": access_token, "token_type": "bearer"}
+    
+    raise HTTPException(status_code=401, detail="Invalid credentials")
 
-class WorkspaceCreate(WorkspaceBase):
-    pass  
+# --- 3. GitHub Login ---
+@app.get("/auth/github/login")
+def github_login():
+    client_id = "YOUR_GITHUB_CLIENT_ID" 
+    github_auth_url = f"https://github.com/login/oauth/authorize?client_id={client_id}&scope=repo"
+    return RedirectResponse(url=github_auth_url)
 
-class Workspace(WorkspaceBase):
-    id: int = Field(..., json_schema_extra={"example": 42}, description="The unique identification number of the workspace")
-    owner_id: int = Field(..., json_schema_extra={"example": 1}, description="The database ID of the user who owns this workspace")
+# --- 4. Protected Workspace Routes ---
+@app.post("/workspaces/", response_model=schemas.Workspace)
+def create_workspace(
+    workspace: schemas.WorkspaceCreate, 
+    background_tasks: BackgroundTasks,  # ← Injected BackgroundTasks here
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    try:
+        print(f"Creating workspace for user ID: {current_user.id}")
 
-    model_config = ConfigDict(from_attributes=True)
+        if hasattr(workspace, 'model_dump'):
+            new_data = workspace.model_dump()
+        else:
+            new_data = workspace.dict()
 
+        # Creates row - will default to WorkspaceStatus.CREATING automatically
+        db_workspace = models.Workspace(
+            **new_data, 
+            owner_id=current_user.id
+        )
 
-# ==========================================
-# AUTH & TOKEN SCHEMAS
-# ==========================================
+        db.add(db_workspace)
+        db.commit()
+        db.refresh(db_workspace)
 
-class Token(BaseModel):
-    access_token: str = Field(..., json_schema_extra={"example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."}, description="The signed JWT access token")
-    token_type: str = Field(..., json_schema_extra={"example": "bearer"}, description="The token validation type wrapper")
+        # Trigger the provisioning background worker asynchronously!
+        # Pass database.SessionLocal so the background thread can safely create its own connection context.
+        background_tasks.add_task(provision_workspace, db_workspace.id, database.SessionLocal)
 
-class LoginRequest(BaseModel):
-    username: str = Field(..., json_schema_extra={"example": "admin"}, description="Account username")
-    password: str = Field(..., json_schema_extra={"example": "password123"}, description="Account password")
+        return db_workspace
+
+    except Exception as e:
+        print(f"!!! WORKSPACE POST ERROR: {e}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/workspaces/", response_model=List[schemas.Workspace])
+def list_workspaces(db: Session = Depends(get_db)):
+    return db.query(models.Workspace).all()
+
+@app.delete("/workspaces/{workspace_id}")
+def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
+    workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    db.delete(workspace)
+    db.commit() 
+    return {"message": "Workspace deleted successfully"}
