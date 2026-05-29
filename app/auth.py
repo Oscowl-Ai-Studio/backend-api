@@ -1,9 +1,10 @@
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta  # ← Updated timezone here
 from typing import Optional
 from jose import jwt, JWTError
 from fastapi import Request, HTTPException, status, Depends
-from fastapi.security import APIKeyHeader  # This creates the "Value" box
+from fastapi.responses import JSONResponse  # ← Added this import
+from fastapi.security import APIKeyHeader 
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
@@ -22,7 +23,7 @@ oauth2_scheme = APIKeyHeader(name="Authorization", auto_error=False)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=30)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=30)  # ← Changed here
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -74,19 +75,26 @@ class JWTMiddleware(BaseHTTPMiddleware):
         # 3. Check for the Authorization Header
         auth_header = request.headers.get("Authorization")
         if not auth_header:
-            raise HTTPException(status_code=401, detail="Authentication required: No token provided")
+            # Changed from raise HTTPException to return JSONResponse
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required: No token provided"}
+            )
 
         # 4. ROBUST TOKEN EXTRACTION
-        # This part handles both "Bearer <token>" AND just "<token>"
         if auth_header.startswith("Bearer "):
             token = auth_header.split(" ")[1]
         else:
-            token = auth_header  # If user forgot "Bearer ", use the whole string
+            token = auth_header  
 
         # 5. VALIDATION
         try:
             jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             return await call_next(request)
         except Exception as e:
-            print(f"Token Error: {e}") # This shows in your terminal
-            raise HTTPException(status_code=401, detail="Invalid or expired token")
+            print(f"Token Error: {e}") 
+            # Changed from raise HTTPException to return JSONResponse
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or expired token"}
+            )
