@@ -1,24 +1,11 @@
 version: '3.8'
 
 services:
-  db:
-    image: postgres:15
-    restart: always
-    environment:
-      POSTGRES_USER: utkarshasalokhe
-      POSTGRES_PASSWORD: Ups292001
-      POSTGRES_DB: utkarshasalokhe_db
-    ports:
-      - "5432:5432"
-
-  api:
+  backend:
     build: .
-    restart: always
-    depends_on:
-      - db
-    environment:
-      DATABASE_URL: postgresql://Utkarshasalokhe:Ups292001@db:5432/utkarshasalokhe_db
+    image: backend-api:latest
     ports:
       - "8000:8000"
-    #volumes:
-     # - .:/app
+    environment:
+      - DATABASE_URL="postgresql://postgresql:OSCOWL%40123@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?sslmode=require"
+    restart: always
