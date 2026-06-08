@@ -26,14 +26,13 @@ class User(UserBase):
 class WorkspaceBase(BaseModel):
     name: str = Field(..., json_schema_extra={"example": "Data-Analysis-Pod"}, description="The display name of the developer workspace")
     description: Optional[str] = Field(None, json_schema_extra={"example": "Jupyter notebook instance for model evaluation"}, description="Detailed purpose of the workspace environment")
-
 class WorkspaceCreate(WorkspaceBase):
-    pass  
-
+    pass
 class Workspace(WorkspaceBase):
     id: int = Field(..., json_schema_extra={"example": 42}, description="The unique identification number of the workspace")
     owner_id: int = Field(..., json_schema_extra={"example": 1}, description="The database ID of the user who owns this workspace")
-
+# 🌟 ADD THIS FIELD BELOW TO FIX THE FLOW
+    status: str = Field("CREATING", json_schema_extra={"example": "RUNNING"}, description="The operational state of the container workspace pod")
     # This line below fixes warning 2!
     model_config = ConfigDict(from_attributes=True)
 
