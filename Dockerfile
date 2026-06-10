@@ -1,17 +1,17 @@
-FROM python:3.10-slim
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y libpq-dev gcc
-
-WORKDIR /app
-
-# Upgrade pip first
-RUN pip install --upgrade pip
-
+FROM python:3.11-slim AS builder
+WORKDIR /build
+RUN pip install --no-cache-dir pip==25.0.1
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --user -r requirements.txt
 
-COPY . .
-
-# Use absolute path to ensure it finds uvicorn
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+FROM python:3.11-slim
+WORKDIR /app
+COPY --from=builder /root/.local /root/.local
+COPY alembic.ini .
+COPY alembic/ alembic/
+COPY app/ app/
+COPY docker-entrypoint.sh .
+ENV PATH=/root/.local/bin:$PATH
+RUN chmod +x docker-entrypoint.sh
+EXPOSE 8000
+ENTRYPOINT ["./docker-entrypoint.sh"]

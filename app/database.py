@@ -1,38 +1,20 @@
 import os
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
-# 1. Update the scheme from 'postgresql://' to 'postgresql+asyncpg://'
-# Note: Azure requires '?ssl=require' for asyncpg instead of '?sslmode=require'
-DATABASE_URL = "postgresql+asyncpg://postgresql:********@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?ssl=require"
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/postgres")
 
-print(f"DEBUG: Using Async DATABASE_URL: {DATABASE_URL}")
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args={"connect_timeout": 3})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# 2. Create the Async Engine
-engine = create_async_engine(
-    DATABASE_URL, 
-    echo=True, # Logs generated SQL queries to your terminal (great for debugging)
-    pool_pre_ping=True # Ensures disconnected connections are automatically re-established
-)
 
-# 3. Create the Async Session factory
-AsyncSessionLocal = async_sessionmaker(
-    bind=engine, 
-    class_=AsyncSession, 
-    expire_on_commit=False
-)
+class Base(DeclarativeBase):
+    pass
 
-# 4. Declarative base for models
-Base = declarative_base()
 
-# 5. Async dependency for FastAPI routers
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
-        finally:
-            await session.close()
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
