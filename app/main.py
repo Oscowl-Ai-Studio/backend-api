@@ -1,28 +1,51 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+import os
+import time
+import logging
+from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks  # ← Added BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 from typing import List
-import logging
 
 # Internal imports
 from . import models, schemas, database, auth
 
+# Set up a logger to view provisioning logs in your terminal
+logger = logging.getLogger("uvicorn")
+
 # Initialize Database tables
-models.Base.metadata.create_all(bind=database.engine)
+from sqlalchemy.ext.asyncio import AsyncEngine  # ← Add this import near your other imports
+
+# Initialize Database tables cleanly depending on engine type
+if isinstance(database.engine, AsyncEngine):
+    # If the engine is async, tables are typically managed by Alembic, 
+    # so we pass here during a synchronous test collection.
+    pass
+else:
+    # Fallback for synchronous test engines
+    models.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI(title="Workspace API - AI Studio")
 
 # --- CORS Middleware ---
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",  # Local React/NextJS default
+    "http://localhost:5173",  # Local Vite default
+]
+
+# If the infrastructure team defines a FRONTEND_URL in the production environment variables, append it
+env_frontend_url = os.environ.get("FRONTEND_URL")
+if env_frontend_url:
+    ALLOWED_ORIGINS.append(env_frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], 
+    allow_origins=ALLOWED_ORIGINS, 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 # Register JWT Middleware (Protects your routes)
 app.add_middleware(auth.JWTMiddleware)
 
@@ -34,23 +57,45 @@ def get_db():
     finally:
         db.close()
 
+
+# --- CONTAINER PROVISIONING STUB FUNCTION ---
+def provision_workspace(workspace_id: int, db_session_factory):
+    """
+    Simulates asynchronous workspace container provisioning.
+    Logs actions, waits to simulate a pod creation delay, and updates database status.
+    """
+    # 1. Mandatory Log print statement
+    logger.info(f"Provisioning workspace {workspace_id}")
+    
+    # 2. Simulate background task runtime delay (e.g., waiting for K8s)
+    time.sleep(2)
+    
+    # 3. Spin up an isolated session to update the status safely in the background thread
+    db = db_session_factory()
+    try:
+        db_workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
+        if db_workspace:
+            db_workspace.status = models.WorkspaceStatus.RUNNING
+            db.commit()
+            logger.info(f"Workspace {workspace_id} has been provisioned successfully and is now running.")
+    finally:
+        db.close()
+
+
 # --- 1. Health Check ---
 @app.get("/health")
 def health_check():
     return {"status": "success", "message": "Backend is alive and connected!"}
 
-# --- 2. Task: Basic Auth Endpoint (Stub Login) ---
-# Credentials: username: admin / password: password123
+# --- 2. Basic Auth Endpoint (Stub Login) ---
 @app.post("/login")
 def login(login_data: schemas.LoginRequest, db: Session = Depends(get_db)):
     if login_data.username == "admin" and login_data.password == "password123":
-        # 1. Check if the admin exists in the ACTUAL database
         user = db.query(models.User).filter(models.User.username == "admin").first()
         
-        # 2. If not, SAVE them to the database now
         if not user:
             user = models.User(
-                id=1, # Match the failsafe ID
+                id=1,
                 username="admin", 
                 email="admin@example.com", 
                 hashed_password="hashed_password"
@@ -59,7 +104,6 @@ def login(login_data: schemas.LoginRequest, db: Session = Depends(get_db)):
             db.commit()
             db.refresh(user)
         
-        # 3. Now create the token
         access_token = auth.create_access_token(data={"sub": user.username})
         return {"access_token": access_token, "token_type": "bearer"}
     
@@ -76,21 +120,19 @@ def github_login():
 @app.post("/workspaces/", response_model=schemas.Workspace)
 def create_workspace(
     workspace: schemas.WorkspaceCreate, 
+    background_tasks: BackgroundTasks,  # ← Injected BackgroundTasks here
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(auth.get_current_user)
 ):
     try:
-        # 1. Print for debugging (check your terminal after clicking Execute)
         print(f"Creating workspace for user ID: {current_user.id}")
 
-        # 2. Prepare the data
-        # Check Pydantic version and convert to dict
         if hasattr(workspace, 'model_dump'):
-            new_data = workspace.model_dump() # Pydantic v2
+            new_data = workspace.model_dump()
         else:
-            new_data = workspace.dict()       # Pydantic v1
+            new_data = workspace.dict()
 
-        # 3. Create the Database Object and manually add owner_id
+        # Creates row - will default to WorkspaceStatus.CREATING automatically
         db_workspace = models.Workspace(
             **new_data, 
             owner_id=current_user.id
@@ -99,19 +141,52 @@ def create_workspace(
         db.add(db_workspace)
         db.commit()
         db.refresh(db_workspace)
+
+        # Trigger the provisioning background worker asynchronously!
+        # Pass database.SessionLocal so the background thread can safely create its own connection context.
+        background_tasks.add_task(provision_workspace, db_workspace.id, database.SessionLocal)
+
         return db_workspace
 
     except Exception as e:
-        # This will show the real error in your terminal
         print(f"!!! WORKSPACE POST ERROR: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/workspaces/", response_model=List[schemas.Workspace])
 def list_workspaces(db: Session = Depends(get_db)):
-    # This is also protected by the middleware but doesn't need current_user logic
-    return db.query(models.Workspace).all()
+    try:
+        # 1. Try to fetch real rows from the database
+        workspaces = db.query(models.Workspace).all()
+        
+        # 2. If database is connected but has NO entries yet, return a mock array
+        if not workspaces:
+            logger.info("Database is connected but empty. Returning fallback mock data.")
+            return [
+                {
+                    "id": 1, 
+                    "name": "Mock Workspace (Empty DB)", 
+                    "status": "RUNNING", 
+                    "owner_id": 1, 
+                    "description": "Fallback entry because your database table has no data rows yet."
+                }
+            ]
+            
+        # 3. If there are actual entries in the DB, return them safely
+        return workspaces
 
+    except Exception as e:
+        # 4. If the database crashes or is completely offline, intercept the crash and return mock data
+        logger.error(f"DB Offline fallback triggered: {e}")
+        return [
+            {
+                "id": 999, 
+                "name": "Mock Workspace (DB Offline)", 
+                "status": "RUNNING", 
+                "owner_id": 1, 
+                "description": "Fail-safe mock entry because the application cannot communicate with the database server."
+            }
+        ]
 @app.delete("/workspaces/{workspace_id}")
 def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
     workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()

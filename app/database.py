@@ -1,28 +1,16 @@
-#import os
+import os
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-#from dotenv import load_dotenv
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
 
-# 1. Load variables from the .env file
-#load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/postgres")
 
-# PASTE YOUR AZURE STRING HERE
-#DATABASE_URL = "postgresql://postgresql:******@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?sslmode=require"
-
-# Build the connection string using the environment variables
-#user = os.getenv("PGUSER")
-#password = os.getenv("PGPASSWORD")
-#host = os.getenv("PGHOST")
-#port = os.getenv("PGPORT")
-#db = os.getenv("PGDATABASE")
-#ssl = os.getenv("PGSSLMODE")
-
-DATABASE_URL = "postgresql://postgresql:********@postgresqldatabasevathsalya.postgres.database.azure.com:5432/postgres?sslmode=require"
-print(f"DEBUG: Using DATABASE_URL: {DATABASE_URL}")
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args={"connect_timeout": 3})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+
+
+class Base(DeclarativeBase):
+    pass
+
 
 def get_db():
     db = SessionLocal()
