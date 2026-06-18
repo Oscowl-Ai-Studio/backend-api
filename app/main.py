@@ -118,14 +118,15 @@ def github_login():
     return RedirectResponse(url=github_auth_url)
 
 # --- 4. Protected Workspace Routes ---
+# 🌟 REPLACE YOUR OLD POST ROUTE WITH THIS ENTIRE BLOCK BELOW:
 @app.post("/workspaces", response_model=schemas.Workspace)
 def create_workspace(
     workspace: schemas.WorkspaceCreate, 
-    background_tasks: BackgroundTasks,  # ← Injected BackgroundTasks here
+    background_tasks: BackgroundTasks, 
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    # 🔐 1. Add an explicit safety check for the authenticated user
+    # 🔐 1. Enforce safety check for the authenticated user
     if not current_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
@@ -139,9 +140,11 @@ def create_workspace(
         else:
             new_data = workspace.dict()
 
-        # Creates row - will default to WorkspaceStatus.CREATING automatically
+        # 🌟 2. Explicitly define fields, passing a clean string for the status
         db_workspace = models.Workspace(
-            **new_data, 
+            name=new_data.get("name"),
+            description=new_data.get("description"),
+            status="creating",  # 🎯 Explicit string prevents native PostgreSQL Enum crashes!
             owner_id=current_user.id
         )
 
@@ -150,7 +153,6 @@ def create_workspace(
         db.refresh(db_workspace)
 
         # Trigger the provisioning background worker asynchronously!
-        # Pass database.SessionLocal so the background thread can safely create its own connection context.
         background_tasks.add_task(provision_workspace, db_workspace.id, database.SessionLocal)
 
         return db_workspace
@@ -159,7 +161,7 @@ def create_workspace(
         print(f"!!! WORKSPACE POST ERROR: {e}")
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.get("/workspaces", response_model=List[schemas.Workspace])
 def list_workspaces(db: Session = Depends(get_db)):
     try:

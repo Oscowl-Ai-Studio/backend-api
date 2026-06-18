@@ -39,11 +39,13 @@ class Workspace(Base):
     description = Column(Text, nullable=True)
     
     # 4. ADDED STATUS COLUMN WITH A DEFAULT VALUE OF 'creating'
+    # 🌟 Change from native Enum to String, keeping the default string value
     status = Column(
-        Enum(WorkspaceStatus), 
-        default=WorkspaceStatus.CREATING, 
+        String, 
+        default=WorkspaceStatus.CREATING.value, 
         nullable=False
     )
+    
     
     # Foreign Key (The link between tables)
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
