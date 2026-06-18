@@ -118,7 +118,7 @@ def github_login():
     return RedirectResponse(url=github_auth_url)
 
 # --- 4. Protected Workspace Routes ---
-@app.post("/workspaces/", response_model=schemas.Workspace)
+@app.post("/workspaces", response_model=schemas.Workspace)
 def create_workspace(
     workspace: schemas.WorkspaceCreate, 
     background_tasks: BackgroundTasks,  # ← Injected BackgroundTasks here
@@ -154,7 +154,7 @@ def create_workspace(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/workspaces/", response_model=List[schemas.Workspace])
+@app.get("/workspaces", response_model=List[schemas.Workspace])
 def list_workspaces(db: Session = Depends(get_db)):
     try:
         # 1. Try to fetch real rows from the database
