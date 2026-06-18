@@ -125,6 +125,12 @@ def create_workspace(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(auth.get_current_user)
 ):
+    # 🔐 1. Add an explicit safety check for the authenticated user
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Authentication credentials missing or invalid"
+        )
     try:
         print(f"Creating workspace for user ID: {current_user.id}")
 
