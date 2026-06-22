@@ -1,7 +1,7 @@
 import os
 import time
 import logging
-from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks  # ← Added BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks, Body  #  Added Body
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
@@ -204,3 +204,29 @@ def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
     db.delete(workspace)
     db.commit() 
     return {"message": "Workspace deleted successfully"}
+# --- 5. Update Workspace Status ---
+@app.patch("/workspaces/{workspace_id}", response_model=schemas.Workspace)
+def update_workspace_status(
+    workspace_id: int, 
+    status_update: str = Body(..., embed=True),  # 🎯 Fixed: Changed fastapi.Body to just Body
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    # 🔐 1. Enforce safety check for the authenticated user
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Authentication credentials missing or invalid"
+        )
+        
+    # 🔍 2. Look up the workspace in the database
+    db_workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
+    if not db_workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    
+    # 🎯 3. Update the status string cleanly
+    db_workspace.status = status_update
+    db.commit()
+    db.refresh(db_workspace)
+    
+    return db_workspace
