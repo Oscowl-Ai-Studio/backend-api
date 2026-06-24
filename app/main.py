@@ -163,39 +163,28 @@ def create_workspace(
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/workspaces", response_model=List[schemas.Workspace])
-def list_workspaces(db: Session = Depends(get_db)):
+def list_workspaces(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    if not current_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Authentication credentials missing or invalid"
+        )
+
     try:
-        # 1. Try to fetch real rows from the database
-        workspaces = db.query(models.Workspace).all()
-        
-        # 2. If database is connected but has NO entries yet, return a mock array
-        if not workspaces:
-            logger.info("Database is connected but empty. Returning fallback mock data.")
-            return [
-                {
-                    "id": 1, 
-                    "name": "Mock Workspace (Empty DB)", 
-                    "status": "RUNNING", 
-                    "owner_id": 1, 
-                    "description": "Fallback entry because your database table has no data rows yet."
-                }
-            ]
-            
-        # 3. If there are actual entries in the DB, return them safely
+        # Fetch only live rows belonging to the authenticated user from Azure
+        workspaces = db.query(models.Workspace).filter(models.Workspace.owner_id == current_user.id).all()
         return workspaces
 
     except Exception as e:
-        # 4. If the database crashes or is completely offline, intercept the crash and return mock data
-        logger.error(f"DB Offline fallback triggered: {e}")
-        return [
-            {
-                "id": 999, 
-                "name": "Mock Workspace (DB Offline)", 
-                "status": "RUNNING", 
-                "owner_id": 1, 
-                "description": "Fail-safe mock entry because the application cannot communicate with the database server."
-            }
-        ]
+        logger.error(f"Database fetch error: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Database query operation failed: {str(e)}"
+        )
+
 @app.delete("/workspaces/{workspace_id}")
 def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
     workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
@@ -204,27 +193,28 @@ def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
     db.delete(workspace)
     db.commit() 
     return {"message": "Workspace deleted successfully"}
+
 # --- 5. Update Workspace Status ---
-@app.patch("/workspaces/{workspace_id}", response_model=schemas.Workspace)
+@app.post("/workspaces/{workspace_id}", response_model=schemas.Workspace)
 def update_workspace_status(
     workspace_id: int, 
-    status_update: str = Body(..., embed=True),  # 🎯 Fixed: Changed fastapi.Body to just Body
+    status_update: str = Body(..., embed=True),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    # 🔐 1. Enforce safety check for the authenticated user
+    # 🔐 Enforce safety check for the authenticated user
     if not current_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Authentication credentials missing or invalid"
         )
         
-    # 🔍 2. Look up the workspace in the database
+    # 🔍 Look up the workspace in the database
     db_workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
     if not db_workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
     
-    # 🎯 3. Update the status string cleanly
+    # 🎯 Update the status string cleanly
     db_workspace.status = status_update
     db.commit()
     db.refresh(db_workspace)
