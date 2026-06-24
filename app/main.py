@@ -184,12 +184,20 @@ def list_workspaces(
             status_code=500, 
             detail=f"Database query operation failed: {str(e)}"
         )
-
 @app.delete("/workspaces/{workspace_id}")
-def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
-    workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
+def delete_workspace(
+    workspace_id: int, 
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user) # FIXED: Added auth
+):
+    workspace = db.query(models.Workspace).filter(
+        models.Workspace.id == workspace_id,
+        models.Workspace.owner_id == current_user.id # Security: Only delete your own
+    ).first()
+    
     if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
+        raise HTTPException(status_code=404, detail="Workspace not found or unauthorized")
+    
     db.delete(workspace)
     db.commit() 
     return {"message": "Workspace deleted successfully"}
@@ -219,4 +227,4 @@ def update_workspace_status(
     db.commit()
     db.refresh(db_workspace)
     
-    return db_workspace
+    return db_workspace 
