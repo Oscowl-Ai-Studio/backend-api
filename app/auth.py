@@ -1,119 +1,74 @@
 import os
+import httpx
 from datetime import datetime, timezone, timedelta
 from typing import Optional
-from jose import jwt, JWTError
-from fastapi import Request, HTTPException, status, Depends
+from jose import jwt
+from fastapi import Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
-from dotenv import load_dotenv
 from . import database, models
 
-load_dotenv()
-
-# Configuration
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    # Fallback for local dev if .env is missing, but raise in production
-    SECRET_KEY = "DEV_SECRET_KEY_CHANGE_ME" 
-
+SECRET_KEY = os.getenv("SECRET_KEY", "sprint3-secret-123")
 ALGORITHM = "HS256"
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
-# auto_error=False allows our middleware or custom logic to handle the error message
 oauth2_scheme = HTTPBearer(auto_error=False)
 
 def create_access_token(data: dict):
     to_encode = data.copy()
-    # Token valid for 30 minutes
-    expire = datetime.now(timezone.utc) + timedelta(minutes=30)
+    expire = datetime.now(timezone.utc) + timedelta(hours=24)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(oauth2_scheme), 
-    db: Session = Depends(database.get_db)
-):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    
-    if not credentials or not credentials.credentials:
-        raise credentials_exception
-
-    # 🛠️ SAFETY CHECK: If the token itself starts with "Bearer ", strip it.
-    # This fixes the "Bearer Bearer <token>" issue from your curl.
-    token = credentials.credentials
-    if token.startswith("Bearer "):
-        token = token.replace("Bearer ", "").strip()
-    else:
-        token = token.strip()
-
+async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(oauth2_scheme), db: Session = Depends(database.get_db)):
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Token missing")
     try:
-        # Decode token with 60s leeway for clock skew
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"leeway": 60})
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except Exception as e:
-        print(f"DEBUG: JWT Decode Error: {e}")
-        raise credentials_exception
-        
-    # Look up user in DB
-    user = db.query(models.User).filter(models.User.username == username).first()
-    
-    # Hardcoded fallback for the 'admin' user if DB is empty
-    if user is None and username == "admin":
-        # Create a transient user object for the request session
-        return models.User(id=1, username="admin", email="admin@example.com")
-        
-    if user is None:
-        raise credentials_exception
-    return user
+        user = db.query(models.User).filter(models.User.username == username).first()
+        if not user: raise Exception()
+        return user
+    except:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+# GitHub Helpers
+async def get_github_access_token(code: str):
+    async with httpx.AsyncClient() as client:
+        res = await client.post(
+            "https://github.com/login/oauth/access_token",
+            params={"client_id": GITHUB_CLIENT_ID, "client_secret": GITHUB_CLIENT_SECRET, "code": code},
+            headers={"Accept": "application/json"}
+        )
+        return res.json().get("access_token")
+
+async def get_github_user_info(token: str):
+    async with httpx.AsyncClient() as client:
+        res = await client.get("https://api.github.com/user", headers={"Authorization": f"token {token}"})
+        return res.json()
 
 class JWTMiddleware(BaseHTTPMiddleware):
-    """
-    Middleware to intercept requests. 
-    Note: Public routes are skipped. 
-    """
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+        # 1. ALLOW these paths without a token
+        if any(path.startswith(p) for p in ["/auth/github", "/docs", "/openapi.json", "/health"]):
+            return await call_next(request)
         
-        # 1. Skip pre-flight CORS requests
         if request.method == "OPTIONS":
             return await call_next(request)
-        
-        # 2. Define truly public routes
-        public_prefixes = ["/auth/github/login", "/login", "/health", "/docs", "/openapi.json"]
-        if any(path.startswith(prefix) for prefix in public_prefixes):
-            return await call_next(request)
 
-        # 3. Handle Authorization Header
+        # 2. CHECK token for everything else
         auth_header = request.headers.get("Authorization")
         if not auth_header:
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Authentication required: No token provided"}
-            )
-
-        # Clean token from header
-        if auth_header.startswith("Bearer "):
-            # Split and handle potential double "Bearer Bearer"
-            parts = auth_header.split(" ")
-            # If parts are ["Bearer", "Bearer", "token"], take the last one
-            token = parts[-1] 
-        else:
-            token = auth_header  
-
-        # 4. Validate Token signature globally
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized: No header"})
+        
         try:
-            jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"leeway": 60})
+            token = auth_header.split(" ")[-1]
+            jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
             return await call_next(request)
-        except Exception as e:
-            print(f"DEBUG: Middleware Token Error: {e}") 
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid or expired token"}
-            )
+        except:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized: Invalid token"})

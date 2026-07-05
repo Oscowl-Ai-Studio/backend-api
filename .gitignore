@@ -1,9 +1,7 @@
-venv/
-__pycache__/
-*.pyc
 .env
-.DS_Store
-# Custom scripts
-fix_db.py
-sync_db.py
-test_connection.py
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.db
+.vscode/
