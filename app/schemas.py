@@ -22,3 +22,7 @@ class UserBase(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
+    
+    # --- Added for Sprint 3 File API Task ---
+class FileWriteRequest(BaseModel):
+    content: str

@@ -1,7 +1,8 @@
 import logging
 import time
 from typing import List
-from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request
+import asyncio  # Needed for async file streaming loops
+from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.orm import Session
@@ -123,43 +124,6 @@ def create_workspace(
     db: Session = Depends(get_db), 
     user: models.User = Depends(auth.get_current_user)
 ):
-<<<<<<< HEAD
-    #  1. Enforce safety check for the authenticated user
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Authentication credentials missing or invalid"
-        )
-    try:
-        print(f"Creating workspace for user ID: {current_user.id}")
-
-        if hasattr(workspace, 'model_dump'):
-            new_data = workspace.model_dump()
-        else:
-            new_data = workspace.dict()
-
-        # 🌟 2. Explicitly define fields, passing a clean string for the status
-        db_workspace = models.Workspace(
-            name=new_data.get("name"),
-            description=new_data.get("description"),
-            status="creating",  # 🎯 Explicit string prevents native PostgreSQL Enum crashes!
-            owner_id=current_user.id
-        )
-
-        db.add(db_workspace)
-        db.commit()
-        db.refresh(db_workspace)
-
-        # Trigger the provisioning background worker asynchronously!
-        background_tasks.add_task(provision_workspace, db_workspace.id, database.SessionLocal)
-
-        return db_workspace
-
-    except Exception as e:
-        print(f"!!! WORKSPACE POST ERROR: {e}")
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-=======
     # Create DB entry with status 'provisioning'
     db_ws = models.Workspace(
         name=ws.name, 
@@ -170,7 +134,6 @@ def create_workspace(
     db.add(db_ws)
     db.commit()
     db.refresh(db_ws)
->>>>>>> 289414185dac943accd11fa5e9cb736ce84637f0
     
     # Trigger background provisioning
     bg.add_task(provision_task, db_ws.id, user.username, database.SessionLocal)
@@ -188,41 +151,6 @@ def delete_workspace(workspace_id: int, db: Session = Depends(get_db), user: mod
         models.Workspace.owner_id == user.id
     ).first()
     
-<<<<<<< HEAD
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found or unauthorized")
-    
-    db.delete(workspace)
-    db.commit() 
-    return {"message": "Workspace deleted successfully"}
-
-# --- 5. Update Workspace Status ---
-@app.post("/workspaces/{workspace_id}", response_model=schemas.Workspace)
-def update_workspace_status(
-    workspace_id: int, 
-    status_update: str = Body(..., embed=True),
-    db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user)
-):
-    #  Enforce safety check for the authenticated user
-    if not current_user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Authentication credentials missing or invalid"
-        )
-        
-    # Look up the workspace in the database
-    db_workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
-    if not db_workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
-    #  Update the status string cleanly
-    db_workspace.status = status_update
-    db.commit()
-    db.refresh(db_workspace)
-    
-    return db_workspace 
-=======
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
         
@@ -265,8 +193,88 @@ def get_files(
         logger.error(f"File API Error: {e}")
         raise HTTPException(status_code=500, detail="Could not reach container file system")
 
+
+@app.post("/workspaces/{workspace_id}/files")
+def write_file(
+    workspace_id: int,
+    path: str,
+    file_data: schemas.FileWriteRequest,
+    user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Writes content into a file path inside the running container"""
+    ws = db.query(models.Workspace).filter(
+        models.Workspace.id == workspace_id,
+        models.Workspace.owner_id == user.id
+    ).first()
+    
+    if not ws or ws.status != "running":
+        raise HTTPException(status_code=400, detail="Workspace must be actively running.")
+
+    try:
+        k8s_manager.write_file_contents(workspace_id, path, file_data.content)
+        return {"status": "success", "message": f"File at {path} updated."}
+    except Exception as e:
+        logger.error(f"File Write Error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to write file inside container.")
+
+
+@app.delete("/workspaces/{workspace_id}/files")
+def delete_file(
+    workspace_id: int,
+    path: str,
+    user: models.User = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Deletes a file or directory path inside the running container"""
+    ws = db.query(models.Workspace).filter(
+        models.Workspace.id == workspace_id,
+        models.Workspace.owner_id == user.id
+    ).first()
+    
+    if not ws or ws.status != "running":
+        raise HTTPException(status_code=400, detail="Workspace must be actively running.")
+
+    try:
+        k8s_manager.delete_container_file(workspace_id, path)
+        return {"status": "success", "message": f"Deleted {path}."}
+    except Exception as e:
+        logger.error(f"File Deletion Error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete target container file.")
+
+# --- WebSocket Terminal API ---
+
+@app.websocket("/workspaces/{workspace_id}/terminal")
+async def terminal_websocket_proxy(websocket: WebSocket, workspace_id: int):
+    """WebSocket tunnel proxying terminal interactions into the container pod"""
+    await websocket.accept()
+    
+    try:
+        async with k8s_manager.connect_pod_terminal_stream(workspace_id) as pod_stream:
+            
+            async def stream_container_output_to_frontend():
+                try:
+                    while True:
+                        output_bytes = await pod_stream.read()
+                        if not output_bytes:
+                            break
+                        await websocket.send_text(output_bytes.decode(errors="replace"))
+                except Exception:
+                    pass
+
+            asyncio.create_task(stream_container_output_to_frontend())
+
+            while True:
+                frontend_keystroke_data = await websocket.receive_text()
+                await pod_stream.write(frontend_keystroke_data.encode())
+
+    except WebSocketDisconnect:
+        logger.info(f"Terminal connection closed for workspace {workspace_id}")
+    except Exception as e:
+        logger.error(f"WebSocket Proxy Core Failure: {e}")
+        await websocket.close(code=1011)
+
 # Health check
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}
->>>>>>> 289414185dac943accd11fa5e9cb736ce84637f0
