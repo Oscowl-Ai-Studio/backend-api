@@ -126,7 +126,7 @@ def create_workspace(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    # 🔐 1. Enforce safety check for the authenticated user
+    #  1. Enforce safety check for the authenticated user
     if not current_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
@@ -210,19 +210,19 @@ def update_workspace_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    # 🔐 Enforce safety check for the authenticated user
+    #  Enforce safety check for the authenticated user
     if not current_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, 
             detail="Authentication credentials missing or invalid"
         )
         
-    # 🔍 Look up the workspace in the database
+    # Look up the workspace in the database
     db_workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
     if not db_workspace:
         raise HTTPException(status_code=404, detail="Workspace not found")
     
-    # 🎯 Update the status string cleanly
+    #  Update the status string cleanly
     db_workspace.status = status_update
     db.commit()
     db.refresh(db_workspace)
