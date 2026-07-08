@@ -84,19 +84,19 @@ def provision_task(workspace_id: int, db_session_factory):
             if current_status in ["Failed", "Error"]:
                 break
 
-        db_workspace.status = models.WorkspaceStatus.RUNNING if is_running else models.WorkspaceStatus.ERROR
+        # FIXED: Changed from models.WorkspaceStatus Enum references to plain strings
+        db_workspace.status = "running" if is_running else "error"
         db.commit()
         logger.info(f"Workspace {workspace_id} updated to {db_workspace.status}")
     except Exception as e:
         logger.error(f"Failed to provision workspace {workspace_id}: {e}")
         try:
-            db_workspace.status = models.WorkspaceStatus.ERROR
+            db_workspace.status = "error"
             db.commit()
         except:
             pass
     finally:
         db.close()
-
 
 # --- GitHub OAuth Routes ---
 
@@ -108,33 +108,44 @@ async def github_login():
 
 @app.get("/auth/github/callback")
 async def github_callback(code: str, db: Session = Depends(get_db)):
-    """Exchanges code for token, fetches user info, and returns our JWT"""
+    """
+    Exchanges code for token securely, fetches profile info, 
+    and issues an application JWT string redirect.
+    """
     try:
+        # 1. Fetch the raw access configuration array from GitHub
         access_token = await auth.get_github_access_token(code)
-        if not access_token:
-            logger.error("GitHub exchange failed: Code already used or expired.")
-            return RedirectResponse(url=f"{auth.FRONTEND_URL}/login?error=invalid_code")
+        
+        # Guard: Check if the token string is missing or contains a GitHub API error string
+        if not access_token or "error" in str(access_token).lower():
+            logger.error(f"GitHub OAuth handshake failed. Gateway response payload: {access_token}")
+            return RedirectResponse(url=f"{auth.FRONTEND_URL}/login?error=github_handshake_failed")
 
+        # 2. Safely capture the authenticated user's metadata nodes
         gh_user = await auth.get_github_user_info(access_token)
+        if not gh_user or "login" not in gh_user:
+            logger.error(f"Failed to fetch profile info with provided token string. API Payload: {gh_user}")
+            return RedirectResponse(url=f"{auth.FRONTEND_URL}/login?error=invalid_user_payload")
+            
         username = gh_user.get("login")
-        if not username:
-            raise HTTPException(status_code=400, detail="Invalid GitHub user data")
 
+        # 3. Handle database insertion or extraction loops
         user = db.query(models.User).filter(models.User.username == username).first()
         if not user:
-            email = gh_user.get("email") or await auth.get_github_emails(access_token)
+            # Fallback for picking up public profile emails safely
+            email = gh_user.get("email") or f"{username}@users.noreply.github.com"
             user = models.User(username=username, email=email)
             db.add(user)
             db.commit()
             db.refresh(user)
 
+        # 4. Issue the unified system token and execute the target redirect loop
         token = auth.create_access_token(data={"sub": user.username})
         return RedirectResponse(url=f"{auth.FRONTEND_URL}/callback?token={token}")
 
     except Exception as e:
-        logger.error(f"Callback Error: {e}")
-        return JSONResponse(status_code=500, content={"detail": "Authentication failed"})
-
+        logger.error(f"Critical Callback Engine Exception: {e}")
+        return RedirectResponse(url=f"{auth.FRONTEND_URL}/login?error=internal_server_exception")
 
 # --- Workspace Management Routes ---
 
@@ -151,10 +162,11 @@ def create_workspace(
         else:
             new_data = ws.dict()
 
+        # FIXED: Set status assignment line directly to a plain string value
         db_ws = models.Workspace(
             **new_data,
             owner_id=user.id,
-            status=models.WorkspaceStatus.CREATING  # Matching Infra model defaults
+            status="creating"
         )
         db.add(db_ws)
         db.commit()

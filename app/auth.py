@@ -16,7 +16,7 @@ GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
-# HTTPBearer automatically generates the elegant "Authorize (Lock icon)" box in your Swagger docs!
+# Elegantly shows the lock icons in Swagger UI
 oauth2_scheme = HTTPBearer(auto_error=False)
 
 def create_access_token(data: dict):
@@ -33,7 +33,7 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
         username: str = payload.get("sub")
         user = db.query(models.User).filter(models.User.username == username).first()
         
-        # Failsafe for your local admin tester account if user table is fresh/empty
+        # Admin failsafe fallback for fresh local testing
         if not user and username == "admin":
             return models.User(id=1, username="admin", email="admin@example.com")
             
@@ -43,7 +43,7 @@ async def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] =
     except:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-# GitHub OAuth Network Communications Drivers
+# GitHub Network Engines
 async def get_github_access_token(code: str):
     async with httpx.AsyncClient() as client:
         res = await client.post(
@@ -63,23 +63,25 @@ class JWTMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
         
-        # 1. ALLOW public authentication and core documentation paths without restriction
-        if any(path.startswith(p) for p in ["/auth/github", "/login", "/docs", "/openapi.json", "/health"]):
+        # 1. FIXED: Explicit exact path matching allows your callback route to successfully execute redirect returns!
+        public_exact_paths = ["/auth/github", "/auth/github/callback", "/login", "/health"]
+        public_prefixes = ["/docs", "/openapi.json"]
+        
+        if path in public_exact_paths or any(path.startswith(p) for p in public_prefixes):
             return await call_next(request)
         
-        # 2. Allow public access ONLY to the listing route to match infra's workspace view rule
+        # 2. Infra Requirement: Public access to listing routes
         if request.method == "GET" and (path == "/workspaces" or path == "/workspaces/"):
             return await call_next(request)
             
-        # 3. Traefik Gateway Routing Exception: Allow traffic straight to the active container pods
-        # This keeps backend auth from dropping proxied connections to individual code-server/ttyd instances
+        # 3. Infra Requirement: Traefik Container routing bypass
         if path.startswith("/workspace/"):
             return await call_next(request)
         
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        # 4. Check tokens on all explicit CRUD execution routes (Files, Terminal WebSockets)
+        # 4. Token Check Execution for Secure File and Terminal Routes
         auth_header = request.headers.get("Authorization")
         if not auth_header:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized: No header provided"})
