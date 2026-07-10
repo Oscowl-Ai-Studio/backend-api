@@ -60,19 +60,22 @@ def provision_task(workspace_id: int, db_session_factory):
     Background Task matching Infra structure:
     - Sets initial provisioning details.
     - Polls status safely.
+    - Gracefully catches Kubernetes failures (e.g., Quota Exceeded) and marks state as 'error'.
     """
     logger.info(f"Provisioning workspace {workspace_id}")
     db = db_session_factory()
+    db_workspace = None
     try:
         db_workspace = db.query(models.Workspace).filter(models.Workspace.id == workspace_id).first()
         if not db_workspace:
             logger.error(f"Workspace {workspace_id} not found in DB")
             return
 
-        # Trigger pod creation via infra provisioner (uses owner_id)
+        # 1. Trigger pod creation via infra provisioner (uses owner_id)
+        # Throws an exception immediately if Kubernetes resource limits/quotas are exceeded
         provision_workspace_pod(workspace_id, db_workspace.owner_id)
 
-        # Polling Loop to check execution phase state
+        # 2. Polling Loop to check execution phase state
         max_retries = 30
         is_running = False
         for _ in range(max_retries):
@@ -82,19 +85,24 @@ def provision_task(workspace_id: int, db_session_factory):
                 is_running = True
                 break
             if current_status in ["Failed", "Error"]:
+                logger.error(f"Kubernetes reported a cluster deployment error phase: {current_status}")
                 break
 
-        # FIXED: Changed from models.WorkspaceStatus Enum references to plain strings
         db_workspace.status = "running" if is_running else "error"
         db.commit()
         logger.info(f"Workspace {workspace_id} updated to {db_workspace.status}")
+        
     except Exception as e:
-        logger.error(f"Failed to provision workspace {workspace_id}: {e}")
-        try:
-            db_workspace.status = "error"
-            db.commit()
-        except:
-            pass
+        # 3. CRITICAL ERROR CATCH: Traps quota caps, API failures, or network timeouts
+        logger.error(f"CRITICAL: Resource allocation failed for workspace {workspace_id}: {e}")
+        if db_workspace:
+            try:
+                db_workspace.status = "error"
+                db.commit()
+                logger.info(f"Workspace {workspace_id} status cleanly set to 'error' in database.")
+            except Exception as db_err:
+                logger.error(f"Failed to commit error status fallback to database: {db_err}")
+                db.rollback()
     finally:
         db.close()
 

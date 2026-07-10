@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 
 class WorkspaceBase(BaseModel):
@@ -12,8 +12,9 @@ class Workspace(WorkspaceBase):
     id: int
     status: str
     owner_id: int
-    class Config:
-        from_attributes = True
+    
+    # FIXED: Replaced class-based Config with the clean Pydantic V2 ConfigDict wrapper
+    model_config = ConfigDict(from_attributes=True)
 
 class UserBase(BaseModel):
     username: str
@@ -23,6 +24,6 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     
-    # --- Added for Sprint 3 File API Task ---
+# --- Added for Sprint 3 File API Task ---
 class FileWriteRequest(BaseModel):
     content: str
