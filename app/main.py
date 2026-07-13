@@ -42,8 +42,19 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# 2. JWT Middleware (Protects all routes except Auth and Docs)
-app.add_middleware(auth.JWTMiddleware)
+# --- 2. Custom Base Middleware for Route Exclusions ---
+# FIXED: We intercept requests to bypass JWT validation for public authentication routes
+@app.middleware("http")
+async def jwt_bypass_middleware(request: Request, call_next):
+    # Exclude public OAuth endpoints, health checks, and API documentation routes from verification
+    public_paths = ["/auth/github", "/auth/github/callback", "/health", "/docs", "/openapi.json"]
+    
+    if request.url.path in public_paths or request.url.path.startswith("/auth/"):
+        return await call_next(request)
+        
+    # If it's a private route, pass it along to the structural JWTMiddleware processing handler
+    return await auth.JWTMiddleware(app)(request, call_next)
+
 
 # Database Dependency
 def get_db():
